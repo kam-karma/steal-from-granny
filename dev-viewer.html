@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Character viewer (dev only)</title>
+    <style>
+      body { margin: 0; background: #5b4636; font: 13px sans-serif; color: #fff; }
+      #info { position: fixed; left: 8px; top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="info"></div>
+    <script type="module">
+      // Dev-only: shows a character from four sides playing one clip. ?url=chars/teyze.glb&clip=walk&h=1.95
+      import * as THREE from 'three'
+      import { loadRigged, instantiate } from '/src/render/rigged.ts'
+      const q = new URLSearchParams(location.search)
+      const url = q.get('url') ?? 'chars/teyze.glb'
+      const clip = q.get('clip') ?? 'idle'
+      const h = Number(q.get('h') ?? 1.95)
+      const gap = Number(q.get('gap') ?? 0.75)
+      const r = new THREE.WebGLRenderer({ antialias: true })
+      r.setSize(innerWidth, innerHeight)
+      r.shadowMap.enabled = true
+      document.body.appendChild(r.domElement)
+      const scene = new THREE.Scene()
+      scene.background = new THREE.Color(0x5b4636)
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x4a3a30, 1.6))
+      const sun = new THREE.DirectionalLight(0xffffff, 2.2)
+      sun.position.set(3, 6, 5)
+      scene.add(sun)
+      const cam = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 100)
+      cam.position.set(0, h * 0.6, h * 4.2 * Math.max(1, gap / 0.75))
+      cam.lookAt(0, h * 0.5, 0)
+      const t = await loadRigged(url, h, Number(q.get('turn') ?? 0))
+      const kind = q.get('person')
+      const { createRiggedPerson } = await import('/src/render/riggedPerson.ts')
+      // ?one=1 shows just one of the four sides, close up.
+      const sides = [0, Math.PI / 2, Math.PI, -Math.PI / 2]
+      const shown = q.has('one') ? [sides[Number(q.get('one'))]] : sides
+      if (q.has('one')) cam.position.set(0, h * 0.6, h * 2.2)
+      const people = shown.map((rot, i) => {
+        const x = q.has('one') ? 0 : (i - 1.5) * h * gap
+        if (q.has('cat')) {
+          // The game's cat view: ?cat=1&mode=nap|stalk|meow|walk
+          return Promise.all([import('/src/render/riggedCat.ts'), import('/src/render/catRig.ts')]).then(async ([{ createRiggedCat }, { loadCatRig }]) => {
+            const v = createRiggedCat(await loadCatRig(url, h))
+            scene.add(v.group)
+            // ?walk=1 moves each cat forward on a small loop so the trot plays.
+            let cat = { pos: { x, z: 0 }, face: Math.PI / 2 - rot, mode: q.get('mode') ?? 'wander', timer: 0, hop: 0 }
+            let tt = 0
+            return { update: (dt) => {
+              tt += dt
+              // Feed a position that advances at walking pace, then pin the model in place for viewing.
+              if (q.has('walk')) cat = { ...cat, pos: { x, z: tt * Number(q.get('walk')) } }
+              v.update(dt, performance.now() / 1000, cat)
+              if (q.has('walk')) v.group.position.set(x, v.group.position.y, 0)
+            } }
+          })
+        }
+        if (kind !== null) {
+          // Full game view with props: ?person=teyze&mode=alarm&torch=1
+          const v = createRiggedPerson(kind, t)
+          scene.add(v.group)
+          const owner = { pos: { x, z: 0 }, face: Math.PI / 2 - rot, mode: q.get('mode') ?? 'patrol', torch: q.has('torch'), suspicion: 0 }
+          return { update: (dt) => v.update(dt, performance.now() / 1000, owner, q.has('poke')) }
+        }
+        const p = instantiate(t)
+        p.group.position.x = x
+        p.group.rotation.y = rot
+        p.play(clip)
+        scene.add(p.group)
+        if (q.has('bones')) {
+          const helper = new THREE.SkeletonHelper(p.group)
+          helper.material.depthTest = false
+          scene.add(helper)
+        }
+        return p
+      })
+      for (let i = 0; i < people.length; i++) people[i] = await people[i]
+      document.getElementById('info').textContent = `${url} clips: ${Object.keys(t.clips).join(', ')} | playing ${clip}`
+      const clock = new THREE.Clock()
+      r.setAnimationLoop(() => {
+        const dt = clock.getDelta()
+        for (const p of people) p.update(dt)
+        r.render(scene, cam)
+      })
+    </script>
+  </body>
+</html>

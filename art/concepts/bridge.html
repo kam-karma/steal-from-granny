@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>art bridge</title></head>
+  <body style="font: 14px sans-serif; background: #222; color: #ddd">
+    <p>Local art bridge: passes files between this folder and the page that opened it.</p>
+    <pre id="log"></pre>
+    <script>
+      // Only talks to the window that opened it. get = read a file from this folder; save = write one here.
+      const log = (t) => (document.getElementById('log').textContent += t + '\n')
+      const opener = window.opener || (window.parent !== window ? window.parent : null)
+      window.addEventListener('message', async (e) => {
+        if (e.source !== opener) return
+        const m = e.data || {}
+        try {
+          if (m.type === 'get') {
+            const r = await fetch('./' + encodeURIComponent(m.name))
+            const blob = await r.blob()
+            opener.postMessage({ type: 'file', id: m.id, name: m.name, blob }, '*')
+            log('sent ' + m.name + ' ' + blob.size)
+          } else if (m.type === 'save') {
+            const r = await fetch('./?name=' + encodeURIComponent(m.name), { method: 'POST', body: m.blob })
+            opener.postMessage({ type: 'saved', id: m.id, name: m.name, ok: r.ok }, '*')
+            log('saved ' + m.name + ' ' + m.blob.size)
+          }
+        } catch (err) {
+          opener.postMessage({ type: 'error', id: m.id, error: String(err) }, '*')
+          log('error ' + err)
+        }
+      })
+      if (opener) opener.postMessage({ type: 'bridge-ready' }, '*')
+      log(opener ? 'ready' : 'no opener')
+    </script>
+  </body>
+</html>
